@@ -23,8 +23,9 @@ import java.time.ZoneId;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-import com.google.gson.JsonParser;
-import com.google.gson.JsonObject;
+import org.apache.kafka.connect.data.Field;
+import org.apache.kafka.connect.data.Schema;
+import org.apache.kafka.connect.data.SchemaBuilder;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -561,15 +562,30 @@ public class DynamoDBSourceTaskTests {
         task.start(configs);
         List<SourceRecord> response = task.poll();
 
-        String expected = "{col2:val1,col3:1,col1:key1}";
-        String expectedKey = "{col1:key2}";
-        JsonObject expectedJson = new JsonParser().parse(expected).getAsJsonObject();
-        JsonObject expectedKeyJson = new JsonParser().parse(expectedKey).getAsJsonObject();
+        final Schema expectedDocumentSchema = SchemaBuilder.struct().name("DynamoDB.AttributeValue")
+                                        .field("col2", Schema.STRING_SCHEMA)
+                                        .field("col3", Schema.STRING_SCHEMA)
+                                        .field("col1", Schema.STRING_SCHEMA)
+                                        .build();
+        final Struct expectedDocument = new Struct(expectedDocumentSchema)
+                                        .put("col2","val1")
+                                        .put("col3","1")
+                                        .put("col1","key1");
+
+        final Schema expectedDocumentColSchema = SchemaBuilder.struct().name("DynamoDB.AttributeValue")
+                                        .field("col1", Schema.STRING_SCHEMA)
+                                        .build();
+
+        final Struct expectedDocColValue = new Struct(expectedDocumentColSchema)
+                                        .put("col1","key2");
+
+        Struct actualDocument = ((Struct) response.get(0).value()).getStruct("document") ;
+        Struct actualDocumentCol = ((Struct) response.get(1).value()).getStruct("document");
 
         // Assert
-        assertEquals(3, response.size());
-        assertEquals(expectedJson.toString(), ((Struct) response.get(0).value()).getString("document"));
-        assertEquals(expectedKeyJson.toString(), ((Struct) response.get(1).value()).getString("document"));
+        assertEquals(3, response.size());        
+        compareStructs(expectedDocument, actualDocument);
+        compareStructs(expectedDocColValue, actualDocumentCol);
         assertNull(response.get(2).value());  // tombstone
     }
 
@@ -883,4 +899,18 @@ public class DynamoDBSourceTaskTests {
         assertEquals("", shardRegister.get("shard1").getLastCommittedRecordSeqNo());
     }
 
+    public void compareStructs(Struct expectedStruct , Struct actualStruct) {
+        
+        // comparing schema for both struct
+        if (!Objects.equals(expectedStruct.schema(), actualStruct.schema())) {
+                fail("Schema expected " + expectedStruct.schema().fields() + " but actual " + actualStruct.schema().fields());
+        }
+
+        // comparing all fields for both struct
+        for (Field expectedFieldName : expectedStruct.schema().fields()) {
+                Field actualFieldName = actualStruct.schema().field(expectedFieldName.name());
+                assertEquals(expectedStruct.get(expectedFieldName), actualStruct.get(actualFieldName));
+            }
+
+    }
 }
